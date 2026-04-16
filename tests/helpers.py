@@ -61,9 +61,6 @@ class TrackingSectionProxy:
 class TrackingConfigParser(configparser.ConfigParser):
     """ConfigParser that tracks runtime configuration usage.
 
-    Why this exists:
-    - We want compatibility checks based on *actual execution*, not on a manual
-      ``config_schema.py`` list that can drift from code behavior.
     - Missing options are recorded when runtime access fails.
     - Accessed options are recorded to report potentially-unused keys.
 
@@ -127,24 +124,80 @@ def load_preferred_tracking_config(plugin_dir: Path) -> tuple[TrackingConfigPars
     raise FileNotFoundError("No config.ini/config.template.ini/config.example.ini found")
 
 
-def make_sample_metadata() -> pd.DataFrame:
+def make_sample_metadata(config: configparser.ConfigParser | None = None, section: str = "oai_pmh") -> pd.DataFrame:
     """Controlled metadata used by smoke and indicator tests.
 
-    The DataFrame intentionally includes terms mapped by several core indicators
-    (F/A/I/R) so compatibility tests can fail early if the core API contract
-    changes (for example, expected columns or access patterns).
+    If `config` is provided, attempt to read representative term lists from the
+    plugin config (for example `terms_quali_generic`, `identifier_term`,
+    `terms_cv`) and include them in the returned DataFrame. Falls back to the
+    original hardcoded rows when config values are missing or unparsable.
     """
+    import ast
 
+    schema = "{http://purl.org/dc/elements/1.1/}"
+
+    # base defaults (kept for backward compatibility)
     rows = [
-        ["{http://purl.org/dc/elements/1.1/}", "identifier", "https://doi.org/10.1234/example", None],
-        ["{http://purl.org/dc/elements/1.1/}", "title", "Compatibility test record", None],
-        ["{http://purl.org/dc/elements/1.1/}", "rights", "CC-BY-4.0", None],
-        ["{http://purl.org/dc/elements/1.1/}", "access", "open", None],
-        ["{http://purl.org/dc/elements/1.1/}", "subject", "http://id.loc.gov/authorities/subjects/sh85026371", None],
-        ["{http://purl.org/dc/elements/1.1/}", "relation", "https://example.org/related", None],
+        [schema, "identifier", "https://doi.org/10.1234/example", None],
+        [schema, "title", "Compatibility test record", None],
+        [schema, "rights", "CC-BY-4.0", None],
+        [schema, "access", "open", None],
+        [schema, "subject", "http://id.loc.gov/authorities/subjects/sh85026371", None],
+        [schema, "relation", "https://example.org/related", None],
     ]
-    return pd.DataFrame(rows, columns=["metadata_schema", "element", "text_value", "qualifier"])
 
+    if config is None:
+        return pd.DataFrame(rows, columns=["metadata_schema", "element", "text_value", "qualifier"])
+
+    def _parse_option(opt_name):
+        try:
+            raw = config.get(section, opt_name, fallback=None)
+        except Exception:
+            return None
+        if raw is None:
+            return None
+        try:
+            return ast.literal_eval(raw)
+        except Exception:
+            return raw
+
+    # Collect candidate term lists
+    identifier_terms = _parse_option("identifier_term") or _parse_option("identifier_term_data") or []
+    quali_generic = _parse_option("terms_quali_generic") or _parse_option("terms_quali_disciplinar") or []
+    terms_cv = _parse_option("terms_cv") or []
+
+    # Ensure identifier row present (use first identifier term if available)
+    if identifier_terms:
+        first = identifier_terms[0]
+        if isinstance(first, (list, tuple)) and len(first) >= 1:
+            element = first[0] or "identifier"
+            qualifier = first[1] if len(first) > 1 and first[1] != "" else None
+            # choose id_value as before, but keep qualifier when provided
+            id_type = first[1] if len(first) > 1 else None
+            id_value = (
+                "https://doi.org/10.1234/example" if id_type and "doi" in str(id_type).lower() else "urn:example:1234"
+            )
+            rows[0] = [schema, element, id_value, qualifier]
+
+    # Add additional rows for quality-related terms discovered in config
+    for term in quali_generic:
+        # term may be ['element','qualifier'] or ['element','']
+        if isinstance(term, (list, tuple)) and term:
+            element = term[0] or ""
+            qualifier = term[1] if len(term) > 1 and term[1] != "" else None
+            # avoid duplicates
+            if not any(r[1] == element and r[3] == qualifier for r in rows):
+                rows.append([schema, element, f"sample-{element}", qualifier])
+
+    # Add terms from controlled vocabulary list if present (as simple subject rows)
+    for cv in terms_cv:
+        if isinstance(cv, (list, tuple)) and cv:
+            element = cv[0] or "subject"
+            qualifier = cv[1] if len(cv) > 1 and cv[1] != "" else None
+            if not any(r[1] == element and r[3] == qualifier for r in rows):
+                rows.append([schema, element, f"sample-{element}", qualifier])
+
+    return pd.DataFrame(rows, columns=["metadata_schema", "element", "text_value", "qualifier"])
 
 def run_plugin_smoke(config: configparser.ConfigParser, monkeypatch, metadata_df=None) -> tuple[Plugin, dict]:
     """Execute a reusable smoke path.
@@ -155,7 +208,8 @@ def run_plugin_smoke(config: configparser.ConfigParser, monkeypatch, metadata_df
     """
 
     if metadata_df is None:
-        metadata_df = make_sample_metadata()
+        # allow make_sample_metadata to read representative terms from the provided config
+        metadata_df = make_sample_metadata(config=config)
 
     monkeypatch.setattr(Plugin, "get_metadata", lambda self: metadata_df.copy())
 
@@ -175,6 +229,7 @@ def run_plugin_smoke(config: configparser.ConfigParser, monkeypatch, metadata_df
 
     # Run a representative subset of indicators to trigger config and metadata
     # paths used by core decorators and plugin contract.
+    # TODO: Essential tests
     results = {
         "rda_f1_01m": plugin.rda_f1_01m(),
         "rda_f1_02m": plugin.rda_f1_02m(),
