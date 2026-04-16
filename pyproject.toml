@@ -28,8 +28,8 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["fair_eva.plugin.oai_pmh"]
-namespaces = true
+include = ["fair_eva.plugin", "fair_eva.plugin.oai_pmh"]
+namespaces = false
 
 [tool.setuptools.package-data]
 "fair_eva.plugin.oai_pmh" = ["*.ini"]
