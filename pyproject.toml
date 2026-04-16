@@ -28,7 +28,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["fair_eva.plugin.oai_pmh"]
+include = ["fair_eva.plugin", "fair_eva.plugin.oai_pmh"]
 namespaces = true
 
 [tool.setuptools.package-data]

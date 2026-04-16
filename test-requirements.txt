@@ -4,3 +4,4 @@ Flake8-pyproject
 isort
 mypy
 pandas-stubs
+pytest
