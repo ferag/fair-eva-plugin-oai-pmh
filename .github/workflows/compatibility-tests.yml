@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.12"]
-        fair_eva_ref: ${{ fromJson(vars.FAIR_EVA_REFS_JSON || '["main"]') }}
+        fair_eva_ref: ["main", "pre/dev"]
 
     steps:
       - name: Checkout
